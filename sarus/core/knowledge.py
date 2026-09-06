@@ -87,8 +87,11 @@ class SemanticKnowledge:
         vector = self.models.embed(text, model=model)
         if not isinstance(vector, list) or not vector:
             raise RuntimeError('Ollama embedding model returned an empty vector')
+        values = [float(x) for x in vector]
+        if not all(math.isfinite(x) for x in values) or not any(values):
+            raise RuntimeError('Ollama returned an invalid embedding vector')
         self.embedding_model = model
-        return [float(x) for x in vector], model
+        return values, model
 
     @staticmethod
     def _cosine(a: list[float], b: list[float]) -> float:
@@ -111,7 +114,10 @@ class SemanticKnowledge:
         embedded = []
         model_name = None
         for ordinal, chunk in enumerate(chunks):
-            vector, model_name = self._embed(chunk)
+            vector, selected_model = self._embed(chunk)
+            if model_name is not None and (selected_model != model_name or len(vector) != dimensions):
+                raise RuntimeError('Embedding model changed during ingestion. Retry with a stable installed model.')
+            model_name, dimensions = selected_model, len(vector)
             embedded.append((str(uuid.uuid4()), ordinal, chunk, json.dumps(vector, separators=(',', ':'))))
         with transaction(self.db) as c:
             c.execute(
@@ -182,9 +188,13 @@ class SemanticKnowledge:
         qterms = {x for x in re.findall(r'\w+', query.lower()) if len(x) > 2}
         scored = []
         for r in rows:
+            if r[5] != model:
+                continue
             try:
                 vector = [float(x) for x in json.loads(r[4])]
             except Exception:
+                continue
+            if len(vector) != len(qvec) or not all(math.isfinite(x) for x in vector):
                 continue
             semantic = self._cosine(qvec, vector)
             text_terms = set(re.findall(r'\w+', str(r[3]).lower()))

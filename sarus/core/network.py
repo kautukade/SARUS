@@ -246,6 +246,10 @@ class NetworkManager:
             'latency_ms': round((time.perf_counter() - started) * 1000, 2),
             'scan': False,
         }
+        if service_results:
+            result['ok'] = all(s['reachable'] for s in service_results)
+            if not result['ok']:
+                result['error'] = 'One or more registered services are unreachable'
         self._store_check(item, result)
         return result
 

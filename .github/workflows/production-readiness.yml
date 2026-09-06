@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - 'agent/**'
+      - 'fix/**'
     paths:
       - 'jubi/**'
       - 'sarus/**'
@@ -13,7 +14,11 @@ on:
       - 'driver/**'
       - 'tests/**'
       - 'BUILD_MANIFEST.json'
-      - 'docs/PRODUCTION-READINESS.md'
+      - 'docs/**'
+      - 'scripts/**'
+      - 'package*.json'
+      - '*.bat'
+      - '*.pyw'
       - '.github/workflows/**'
   pull_request:
     paths:
@@ -24,7 +29,11 @@ on:
       - 'driver/**'
       - 'tests/**'
       - 'BUILD_MANIFEST.json'
-      - 'docs/PRODUCTION-READINESS.md'
+      - 'docs/**'
+      - 'scripts/**'
+      - 'package*.json'
+      - '*.bat'
+      - '*.pyw'
       - '.github/workflows/**'
   workflow_dispatch:
 
@@ -42,6 +51,10 @@ jobs:
           python-version: '3.11'
       - name: Compile Python
         run: python -m compileall -q jubi sarus tests scripts
+      - name: Functional and live HTTP regression tests
+        run: |
+          python tests/jubi_functional_regression_test.py
+          python tests/jubi_http_functional_test.py
       - name: Installer lifecycle static tests
         run: python tests/jubi_installer_lifecycle_test.py
       - name: Validate dashboard JavaScript syntax
@@ -54,6 +67,14 @@ jobs:
           node --check sarus/web/assets/vision.js
           node --check sarus/web/assets/operator.js
           node --check sarus/web/assets/shell-extension.js
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Dashboard DOM integration tests
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm test
       - name: Unified dashboard regression tests
         run: python tests/dashboard_ui_test.py
       - name: Advanced Local Brain tests
@@ -111,6 +132,8 @@ jobs:
             'installer\JUBI-BACKGROUND.ps1',
             'installer\REGISTER-JUBI-BACKGROUND.ps1',
             'installer\UNREGISTER-JUBI-BACKGROUND.ps1',
+            'installer\BUILD-LAUNCHER.ps1',
+            'scripts\VERIFY-SARUS-REPO.ps1',
             'installer\INSTALL-SARUS.ps1',
             'installer\EXE-INSTALL.ps1',
             'installer\SETUP-BROKER.ps1',
@@ -128,8 +151,15 @@ jobs:
               throw "$script syntax errors: $(($errors | ForEach-Object Message) -join '; ')"
             }
           }
+      - name: Compile source launcher and verify core payload
+        shell: powershell
+        run: .\scripts\VERIFY-SARUS-REPO.ps1
       - name: Compile Python
         run: python -m compileall -q jubi sarus tests scripts
+      - name: Functional and live HTTP regression tests
+        run: |
+          python tests/jubi_functional_regression_test.py
+          python tests/jubi_http_functional_test.py
       - name: Installer lifecycle static tests
         run: python tests/jubi_installer_lifecycle_test.py
       - name: Validate dashboard JavaScript syntax

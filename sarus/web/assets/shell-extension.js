@@ -13,7 +13,7 @@
   };
   function extend(){
     const nav=document.querySelector('.nav-scroll');
-    if(nav&&!document.querySelector('[data-jubi-advanced-nav]')){
+    if(nav&&!nav.querySelector('a[href="/research.html"]')){
       const wrap=document.createElement('div');wrap.setAttribute('data-jubi-advanced-nav','1');
       wrap.innerHTML=`<div class="nav-section">Advanced</div>${advanced.map(i=>`<a class="nav-link ${document.body.dataset.page===i[0]?'active':''}" href="${i[1]}"><span class="nav-icon">${i[3]}</span><span>${i[2]}</span></a>`).join('')}`;
       nav.appendChild(wrap);

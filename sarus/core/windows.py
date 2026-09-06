@@ -152,6 +152,8 @@ class WindowsBroker:
             dst = self._ensure_workspace(parameters['destination_path'])
             if not src.is_file():
                 raise FileNotFoundError(str(src))
+            if src == dst or (dst.exists() and os.path.samefile(src, dst)):
+                raise ValueError('source and destination refer to the same file')
             dst.parent.mkdir(parents=True, exist_ok=True)
             if dst.exists() and not bool(parameters.get('overwrite', False)):
                 raise FileExistsError(str(dst))

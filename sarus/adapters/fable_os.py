@@ -45,10 +45,15 @@ class Adapter(PromptCatalogAdapter):
         prompt = request
         if context:
             prompt += '\n\nPrevious verified pipeline context:\n' + str(context)[-8000:]
-        text = app.models.generate_text(prompt, self.task_type, system)
+        result = app.providers.generate(prompt, self.task_type, system=system)
+        text = str(result.get('response') or '').strip()
+        if not text:
+            raise RuntimeError('The Fable reasoning model returned no response')
         return {
             'ok': True,
             'mode': 'native_fable_intelligence',
+            'tools_executed': False,
+            'route': result.get('jubi_provider_route', {}),
             'source': self.name,
             'integration': integration,
             'capability': source_cap and {k: source_cap[k] for k in ('id', 'path', 'kind', 'name')},

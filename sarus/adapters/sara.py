@@ -22,9 +22,20 @@ class Adapter(PromptCatalogAdapter):
             except Exception as e: detail='SARA API configured but offline: '+str(e)[:100]
         return AdapterStatus(self.name,self.path.exists(),str(self.path),{'label':self.label,'role':self.role,'native':online,'detail':detail,'api':self.base})
     def execute(self,request,app,step=None,capability_id=None,context=None):
+        if step and step.agent == 'live-research':
+            query = request.split('Original user request:', 1)[-1].strip()
+            result = app.research.research(query)
+            return {'ok': True, 'mode': 'public_web_research', 'source': self.name,
+                    'tools_executed': True, 'output': result['answer'], 'evidence': result['sources']}
         if self.token:
             try:
-                out=self._call('/v7/command',{'mode':'agent','command':request,'language':'hinglish','workspace':str(app.root),'auto_execute':True},300); return {'ok':True,'mode':'sara_v7_api','source':self.name,'output':out,'evidence':{'api':self.base}}
+                out=self._call('/v7/command',{'mode':'agent','command':request,'language':'hinglish','workspace':str(app.root/'workspace'),'auto_execute':True},300)
+                ok = isinstance(out,dict) and out.get('ok') is True
+                return {'ok':ok,'mode':'sara_v7_api','source':self.name,'output':out,'evidence':{'api':self.base},'error':None if ok else 'Native runtime did not confirm successful execution'}
             except Exception as e: err=str(e)
         else: err='SARA_AGENT_TOKEN not configured yet'
+        if step and step.agent in {'computer','local-developer'}:
+            return {'ok':False,'status':'blocked','mode':'runtime_required','source':self.name,
+                    'tools_executed':False,'error':err,
+                    'output':'Native SARA is required for natural-language computer/development execution. Use Computer Operator for supported typed workspace actions.'}
         out=super().execute(request,app,step,capability_id,context); out['native_fallback_reason']=err; return out

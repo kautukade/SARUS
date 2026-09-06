@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import http.client
 from html.parser import HTMLParser
 import ipaddress
 import json
@@ -99,6 +100,41 @@ class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, safe)
 
 
+def _public_connection(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None):
+    # Connect to an already validated numeric IP. A second DNS answer cannot
+    # redirect a public-page request into the local computer or LAN.
+    host, port = address
+    error = None
+    for ip in PublicWebResearch._public_host(host):
+        try:
+            return socket.create_connection((ip, port), timeout, source_address)
+        except OSError as exc:
+            error = exc
+    raise error or OSError('No reachable public address')
+
+
+class _PublicHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = _public_connection
+
+
+class _PublicHTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = _public_connection
+
+
+class _PublicHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_PublicHTTPConnection, req)
+
+
+class _PublicHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_PublicHTTPSConnection, req, context=self._context)
+
+
 class PublicWebResearch:
     """Public-web search/read/research with SSRF and prompt-injection boundaries.
 
@@ -193,7 +229,8 @@ class PublicWebResearch:
             },
         )
         opener = urllib.request.build_opener(
-            _SafeRedirectHandler(self._normalize_public_url if validate_public else (lambda x: x))
+            urllib.request.ProxyHandler({}), _PublicHTTPHandler(), _PublicHTTPSHandler(),
+            _SafeRedirectHandler(self._normalize_public_url)
         )
         with opener.open(req, timeout=max(3, min(int(timeout), 60))) as r:
             final_url = r.geturl()
@@ -213,7 +250,10 @@ class PublicWebResearch:
         body = urllib.parse.urlencode({'q': query, 'kl': 'wt-wt', 'kp': '-1'}).encode('utf-8')
         raw, _, _ = self._request(self.SEARCH_URL, data=body, timeout=20, validate_public=True)
         parser = _DuckParser()
-        parser.feed(raw.decode('utf-8', errors='replace'))
+        html_text = raw.decode('utf-8', errors='replace')
+        if any(marker in html_text.lower() for marker in ('anomaly.js', 'anomaly-modal', 'unusual traffic')):
+            raise RuntimeError('Search provider requires human verification. Try a direct public URL in the page reader.')
+        parser.feed(html_text)
         out = []
         seen = set()
         for item in parser.results:
@@ -233,7 +273,7 @@ class PublicWebResearch:
 
     def fetch(self, url: str, timeout: int = 20) -> dict:
         raw, content_type, final_url = self._request(url, timeout=timeout, validate_public=True)
-        if not any(x in content_type for x in ('text/html', 'text/plain', 'application/xhtml+xml', '')):
+        if content_type and not any(x in content_type for x in ('text/html', 'text/plain', 'application/xhtml+xml')):
             raise RuntimeError(f'Unsupported research content type: {content_type or "unknown"}')
         text = raw.decode('utf-8', errors='replace')
         title = final_url

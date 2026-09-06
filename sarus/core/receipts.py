@@ -84,7 +84,9 @@ class ReceiptStore:
 
     def create(self, task_id: str, step_id: str, source: str, status: str, payload: dict):
         with self.lock, closing(sqlite3.connect(self.db)) as c:
-            row = c.execute("SELECT hash FROM receipts ORDER BY ts DESC,id DESC LIMIT 1").fetchone()
+            # Serialize read-head + append across all HTTP/scheduler instances.
+            c.execute('BEGIN IMMEDIATE')
+            row = c.execute("SELECT hash FROM receipts ORDER BY rowid DESC LIMIT 1").fetchone()
             prev = row[0] if row else ''
             rid = str(uuid.uuid4())
             ts = time.time()
@@ -116,7 +118,7 @@ class ReceiptStore:
     def recent(self, limit=100):
         with closing(sqlite3.connect(self.db)) as c:
             rows = c.execute(
-                "SELECT id,ts,task_id,step_id,source,status,payload,prev_hash,hash,signature_alg,key_id,signature FROM receipts ORDER BY ts DESC,id DESC LIMIT ?",
+                "SELECT id,ts,task_id,step_id,source,status,payload,prev_hash,hash,signature_alg,key_id,signature FROM receipts ORDER BY rowid DESC LIMIT ?",
                 (limit,),
             ).fetchall()
         return [
@@ -130,7 +132,7 @@ class ReceiptStore:
         ]
 
     def verify_chain(self):
-        rows = list(reversed(self.recent(100000)))
+        rows = list(reversed(self.recent(-1)))
         prev = ''
         errors = []
         unsigned_legacy = 0

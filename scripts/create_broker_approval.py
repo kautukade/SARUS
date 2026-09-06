@@ -36,11 +36,25 @@ def load_secret() -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description='Create a short-lived SARUS privileged broker approval proof.')
-    ap.add_argument('--request-id', required=True)
-    ap.add_argument('--action-id', required=True)
+    ap.add_argument('--request-id')
+    ap.add_argument('--action-id')
+    ap.add_argument('--request-file', type=Path, help='Saved request JSON from Computer Operator')
     ap.add_argument('--parameters-json', default='{}', help='Exact JSON parameters from the broker request')
     ap.add_argument('--ttl', type=int, default=120, help='Approval lifetime in seconds (1-300)')
     args = ap.parse_args()
+
+    if args.request_file:
+        if args.request_id or args.action_id or args.parameters_json != '{}':
+            ap.error('Use either --request-file or explicit request fields')
+        try:
+            request = json.loads(args.request_file.read_text(encoding='utf-8-sig'))
+            args.request_id = request['request_id']
+            args.action_id = request['action_id']
+            args.parameters_json = json.dumps(request['parameters'], ensure_ascii=False)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            ap.error(f'Invalid request file: {exc}')
+    if not args.request_id or not args.action_id:
+        ap.error('--request-id and --action-id, or --request-file, are required')
 
     secret = load_secret()
 

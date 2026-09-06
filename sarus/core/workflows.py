@@ -16,6 +16,7 @@ class WorkflowScheduler:
         self.event_bus = event_bus
         self.stop_evt = threading.Event()
         self.thread: threading.Thread | None = None
+        self._tick_lock = threading.Lock()
         with transaction(db) as c:
             c.execute(
                 "CREATE TABLE IF NOT EXISTS automations("
@@ -31,6 +32,8 @@ class WorkflowScheduler:
                 pass
 
     def add(self, name, prompt, interval_seconds, enabled=True, metadata=None):
+        if not str(name).strip() or not str(prompt).strip():
+            raise ValueError('automation name and task are required')
         aid = str(uuid.uuid4())
         now = time.time()
         interval = max(60, int(interval_seconds))
@@ -74,6 +77,14 @@ class WorkflowScheduler:
         self._emit('AUTOMATION_TOGGLED', {'automation_id': aid, 'enabled': bool(enabled)})
 
     def tick(self):
+        if not self._tick_lock.acquire(blocking=False):
+            return
+        try:
+            self._tick()
+        finally:
+            self._tick_lock.release()
+
+    def _tick(self):
         now = time.time()
         for a in self.list():
             if not (a['enabled'] and a['next_run'] <= now):
@@ -81,9 +92,18 @@ class WorkflowScheduler:
             self._emit('AUTOMATION_STARTED', {'automation_id': a['id'], 'name': a['name']})
             ok = False
             error = None
+            result = None
+            status = 'failed'
             try:
-                self.runner(a['prompt'], source='automation')
-                ok = True
+                result = self.runner(a['prompt'], source='automation')
+                if not isinstance(result, dict):
+                    raise RuntimeError('automation runner returned no task result')
+                status = str(result.get('status') or ('completed' if result.get('ok') else 'failed'))
+                ok = status == 'completed'
+                if not ok:
+                    error = str(result.get('error') or f'Task ended with status {status}')
+                    self._emit('AUTOMATION_WAITING_APPROVAL' if status == 'waiting_approval' else 'AUTOMATION_FAILED',
+                               {'automation_id': a['id'], 'status': status, 'error': error})
             except Exception as exc:
                 error = str(exc)
                 self._emit(
@@ -92,10 +112,13 @@ class WorkflowScheduler:
                 )
             finally:
                 finished = time.time()
+                metadata = {**a['metadata'], 'last_status': status, 'last_error': error,
+                            'last_task_id': (result or {}).get('task_id') if isinstance(result, dict) else None}
                 with transaction(self.db) as c:
                     c.execute(
-                        "UPDATE automations SET last_run=?,next_run=? WHERE id=?",
-                        (finished, finished + a['interval_seconds'], a['id']),
+                        "UPDATE automations SET last_run=?,next_run=?,metadata=?,"
+                        "enabled=CASE WHEN ?='waiting_approval' THEN 0 ELSE enabled END WHERE id=?",
+                        (finished, finished + a['interval_seconds'], json.dumps(metadata), status, a['id']),
                     )
             if ok:
                 self._emit('AUTOMATION_FINISHED', {'automation_id': a['id'], 'name': a['name']})

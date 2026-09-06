@@ -1,0 +1,16 @@
+# Local user data and credentials must never be published.
+/data/
+/logs/
+/workspace/
+/native/
+/.sarus-venv/
+/.venv/
+/dist-installer/
+/.audit/
+__pycache__/
+*.py[cod]
+.env
+.env.local
+*.key
+*.secret
+node_modules/

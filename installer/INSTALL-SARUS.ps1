@@ -2,7 +2,8 @@ param(
     [switch]$NonInteractive,
     [switch]$NoLaunch,
     [switch]$UpdateMode,
-    [switch]$RepairMode
+    [switch]$RepairMode,
+    [switch]$RequireSaraRuntime
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -127,6 +128,7 @@ if (-not (IsAdmin)) {
     if ($NoLaunch) { $args += '-NoLaunch' }
     if ($UpdateMode) { $args += '-UpdateMode' }
     if ($RepairMode) { $args += '-RepairMode' }
+    if ($RequireSaraRuntime) { $args += '-RequireSaraRuntime' }
     $p = Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Verb RunAs -ArgumentList $args -Wait -PassThru
     exit $p.ExitCode
 }
@@ -172,39 +174,27 @@ try {
             Remove-Item $saraArchive -Force -ErrorAction SilentlyContinue
         }
         else {
-            Log "Verified bundled SARA source is incomplete ($($parts.Count)/24 parts). Trying authenticated GitHub owner fallback..."
-            $git = Get-Command git.exe -ErrorAction SilentlyContinue
-            if (-not $git) { throw 'The verified SARA bundle is incomplete and Git is unavailable for the authenticated owner fallback.' }
-            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $saraTarget) | Out-Null
-            if (Test-Path $saraTarget) { Remove-Item $saraTarget -Recurse -Force }
-            & $git.Source clone --depth 1 'https://github.com/kautukade/SARA-AI-OS.git' $saraTarget
-            if ($LASTEXITCODE -ne 0) { throw 'Could not obtain SARA source. Use an official installer containing the verified finalparts bundle.' }
+            $message = "Optional SARA native runtime is unavailable: bundle has $($parts.Count)/24 parts. Core Jubi and typed Computer Operator remain available."
+            if ($RequireSaraRuntime) { throw $message }
+            Log $message
+
         }
 
         if (-not (Test-Path $saraInstaller)) {
             $foundSaraInstaller = Get-ChildItem -Path (Join-Path $Root 'sources') -Filter 'INSTALL-AND-START-SARA.bat' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($foundSaraInstaller) { $saraInstaller = $foundSaraInstaller.FullName; $saraTarget = $foundSaraInstaller.DirectoryName }
-            else { throw 'SARA Windows dependency installer was not found after source restoration.' }
+            elseif ($RequireSaraRuntime) { throw 'SARA Windows dependency installer was not found after source restoration.' }
         }
     }
 
     # ------------------------------------------------------------------
-    # 2) Restore and verify the legacy native launcher payload.
+    # 2) Compile the launcher from tracked source.
     # ------------------------------------------------------------------
-    $launcherB64 = Join-Path $Root 'vendor\launcher\SARUS.exe.b64'
-    $launcherHashFile = Join-Path $Root 'vendor\launcher\SHA256.txt'
-    if (-not (Test-Path -LiteralPath $launcherB64)) { throw 'vendor\launcher\SARUS.exe.b64 is missing.' }
-    if (-not (Test-Path -LiteralPath $launcherHashFile)) { throw 'vendor\launcher\SHA256.txt is missing.' }
-
+    # Build the reviewed source launcher; the legacy encoded payload is incomplete.
     $launcher = Join-Path $Root 'SARUS.exe'
-    [IO.File]::WriteAllBytes($launcher, [Convert]::FromBase64String((Get-Content $launcherB64 -Raw).Trim()))
-    $launcherExpected = ((Get-Content $launcherHashFile -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
-    $launcherActual = (Get-FileHash -Algorithm SHA256 $launcher).Hash.ToLowerInvariant()
-    if ($launcherActual -ne $launcherExpected) {
-        Remove-Item -LiteralPath $launcher -Force -ErrorAction SilentlyContinue
-        throw "Launcher checksum mismatch. Expected $launcherExpected got $launcherActual"
-    }
-    Log "Verified compatibility launcher reconstructed: $launcherActual"
+    & (Join-Path $PSScriptRoot 'BUILD-LAUNCHER.ps1') -OutputPath $launcher
+    if (-not (Test-Path -LiteralPath $launcher)) { throw 'Jubi launcher build did not produce an EXE.' }
+    Log "Jubi launcher built from tracked source: $((Get-FileHash -Algorithm SHA256 $launcher).Hash)"
 
     # ------------------------------------------------------------------
     # 3) Restore pinned public upstream projects when they are not bundled.
@@ -243,8 +233,11 @@ try {
     # repairs run this; silent updates keep the already-proven machine setup.
     # ------------------------------------------------------------------
     $saraBat = Get-ChildItem -Path (Join-Path $Root 'sources') -Filter 'INSTALL-AND-START-SARA.bat' -File -Recurse | Select-Object -First 1
-    if (-not $saraBat) { throw 'SARA Windows dependency installer not found.' }
-    if ($UpdateMode -and -not $RepairMode) {
+    if (-not $saraBat) {
+        if ($RequireSaraRuntime) { throw 'SARA Windows dependency installer not found.' }
+        Log 'Native SARA provisioning skipped: verified source is unavailable. See System Health for runtime readiness.'
+    }
+    elseif ($UpdateMode -and -not $RepairMode) {
         Log 'Update mode: keeping previously provisioned SARA/Windows dependencies to avoid unnecessary global reinstall work.'
     }
     else {

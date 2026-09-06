@@ -3,6 +3,7 @@
 const JUBI_NAV = [
   {section:'Workspace',items:[['overview','/','Overview','⌂'],['chat','/chat.html','AI Chat','✦'],['tasks','/tasks.html','Tasks & Planner','✓']]},
   {section:'Intelligence',items:[['brain','/brain.html','Brain & Router','◉'],['providers','/providers.html','Providers','☁'],['models','/models.html','Models','◈'],['agents','/agents.html','Agents & Capabilities','◎'],['development','/development.html','Development','⌘'],['knowledge','/knowledge.html','Knowledge','◇'],['fable','/fable.html','Fable Lab','⬡']]},
+  {section:'Advanced',items:[['research','/research.html','Web Research','⌕'],['network','/network.html','Authorized LAN','⌁'],['vision','/vision.html','Vision & Voice','◐']]},
   {section:'Operations',items:[['automation','/automation.html','Automation','↻'],['computer','/computer.html','Computer','▣']]},
   {section:'Trust & System',items:[['security','/security.html','Security & Receipts','◆'],['health','/health.html','System Health','♡'],['activity','/activity.html','Activity','≡']]}
 ];
@@ -31,7 +32,7 @@ const API = {
     const r = await fetch(url, options);
     let x;
     try { x = await r.json(); } catch { throw new Error(`Invalid JSON from ${url}`); }
-    if (!r.ok && r.status !== 423) throw new Error(x.error || `HTTP ${r.status}`);
+    if (!r.ok && r.status !== 423) { const error = new Error(x.error || x.policy?.reason || `HTTP ${r.status}`); error.status=r.status; error.code=x.code; error.payload=x; throw error; }
     return x;
   },
   async token() {
@@ -39,12 +40,12 @@ const API = {
     return _session;
   },
   get(url) { return this.json(url); },
-  async post(url, body, headers = {}) {
-    return this.json(url, {
+  async post(url, body, headers = {}, retry = true) {
+    try { return await this.json(url, {
       method:'POST',
       headers:{'Content-Type':'application/json','X-JUBI-Token':await this.token(),...headers},
       body:JSON.stringify(body || {})
-    });
+    }); } catch(error) { if(retry && error.code==='session_expired') { _session=''; return this.post(url,body,headers,false); } throw error; }
   }
 };
 
@@ -55,7 +56,8 @@ function fmtBytes(v){const n=Number(v||0);if(!n)return '—';const u=['B','KB','
 function fmtMs(v){const n=Number(v);if(!Number.isFinite(n))return '—';return n>=1000?`${(n/1000).toFixed(2)} s`:`${n.toFixed(0)} ms`;}
 function short(v,n=96){const s=String(v??'');return s.length>n?s.slice(0,n)+'…':s;}
 function badge(text,tone='neutral'){return `<span class="badge ${tone}">${esc(text)}</span>`;}
-function statusTone(s){s=String(s||'').toLowerCase();if(['ok','online','connected','completed','success','enabled','ready','running','verified'].some(x=>s.includes(x)))return 'ok';if(['fail','error','offline','missing','denied','rejected','invalid'].some(x=>s.includes(x)))return 'bad';if(['pending','waiting','approval','partial','setup','paused','configured'].some(x=>s.includes(x)))return 'warn';return 'info';}
+function statusTone(s){s=String(s||'').toLowerCase();if(['fail','error','offline','missing','denied','rejected','invalid','unavailable','not ready','disconnected','blocked'].some(x=>s.includes(x)))return 'bad';if(['pending','waiting','approval','partial','setup','paused','unconfigured'].some(x=>s.includes(x)))return 'warn';if(['ok','online','connected','completed','success','enabled','ready','running','verified'].some(x=>s.includes(x)))return 'ok';return 'info';}
+
 function toast(msg,tone=''){let w=byId('toast-wrap');if(!w){w=document.createElement('div');w.id='toast-wrap';w.className='toast-wrap';document.body.appendChild(w);}const d=document.createElement('div');d.className=`toast ${tone}`;d.textContent=msg;w.appendChild(d);setTimeout(()=>d.remove(),3600);}
 function setBusy(btn,busy,label='Working…'){if(!btn)return;if(busy){btn.dataset.old=btn.innerHTML;btn.disabled=true;btn.innerHTML=`<span class="loader"></span>${esc(label)}`;}else{btn.disabled=false;if(btn.dataset.old)btn.innerHTML=btn.dataset.old;}}
 function jsonBox(id,data){const el=byId(id);if(el)el.textContent=typeof data==='string'?data:JSON.stringify(data,null,2);}
@@ -101,6 +103,8 @@ async function initOverview(){
 }
 
 let chatTranscript=[];
+let chatConversationId='';
+let chatSending=false;
 let chatLocalModels=[];
 let chatProviderStatus=null;
 async function initChat(){
@@ -111,15 +115,16 @@ async function initChat(){
   const mode=String(providers.mode||'local_only');
   const modeEl=byId('chat-provider-mode');
   if(modeEl)modeEl.innerHTML=`Current mode: <b>${esc(mode.replaceAll('_',' ').toUpperCase())}</b>. High-privacy requests remain local by default.`;
-  await loadChatModels();renderChat();
-  byId('chat-send').onclick=sendChat;byId('chat-clear').onclick=()=>{chatTranscript=[];renderChat();};
+  await loadChatModels();await loadConversations();renderChat();
+  byId('chat-send').onclick=sendChat;byId('chat-clear').onclick=()=>{if(chatSending)return;chatConversationId='';chatTranscript=[];byId('chat-history').value='';renderChat();};
+  byId('chat-history').onchange=restoreConversation;
   byId('chat-input').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat();}});
 }
 async function loadChatModels(){
   const provider=byId('chat-provider')?.value||'auto';const sel=byId('chat-model');if(!sel)return;
   sel.innerHTML='<option value="">Smart auto-select</option>';
   if(provider==='auto'||provider==='ollama'){
-    sel.innerHTML+=[...chatLocalModels].filter(x=>x.kind!=='embedding').map(x=>`<option value="${esc(x.name)}">${esc(x.name)} · ${esc(x.kind||'unknown')}</option>`).join('');
+    sel.innerHTML+=[...chatLocalModels].filter(x=>x.kind!=='embedding' && x.kind!=='cloud-through-ollama').map(x=>`<option value="${esc(x.name)}">${esc(x.name)} · ${esc(x.kind||'unknown')}</option>`).join('');
     return;
   }
   try{
@@ -131,23 +136,38 @@ async function loadChatModels(){
 }
 function renderChat(){const el=byId('chat-messages');el.innerHTML=chatTranscript.length?chatTranscript.map(m=>`<div class="message ${m.role}">${esc(m.text)}</div>`).join(''):`<div class="message system">Jubi can stay fully local or use configured cloud providers according to Provider Manager mode, task complexity and privacy policy.</div>`;el.scrollTop=el.scrollHeight;}
 async function sendChat(){
-  const input=byId('chat-input'),text=input.value.trim();if(!text)return;const btn=byId('chat-send');
+  const input=byId('chat-input'),text=input.value.trim();if(!text||chatSending)return;chatSending=true;byId('chat-clear').disabled=true;byId('chat-history').disabled=true;const btn=byId('chat-send');
   chatTranscript.push({role:'user',text});renderChat();input.value='';setBusy(btn,true,'Thinking');
   try{
-    const body={text,task_type:byId('chat-type').value||'auto',provider:byId('chat-provider')?.value||'auto'};
+    const body={text,task_type:byId('chat-type').value||'auto',provider:byId('chat-provider')?.value||'auto',conversation_id:chatConversationId||null};
     if(byId('chat-model').value)body.model=byId('chat-model').value;
-    const r=await API.post('/api/chat',body);chatTranscript.push({role:'assistant',text:r.response||r.output||JSON.stringify(r,null,2)});renderChat();
+    const r=await API.post('/api/chat',body);chatConversationId=r.conversation_id;await loadConversations(false);chatTranscript.push({role:'assistant',text:r.response||r.output||JSON.stringify(r,null,2)});renderChat();
     const pr=r.jubi_provider_route||{},br=r.jubi_route||{};
     const provider=pr.provider||'ollama',model=pr.selected_model||br.selected_model||r.model||body.model||'Auto-selected';
     byId('chat-used-model').textContent=`${provider} · ${model}`;
     const routeInfo=byId('chat-route-info');if(routeInfo)routeInfo.textContent=`${pr.mode||chatProviderStatus?.mode||'local_only'} · ${pr.intent||br.intent||'general'} · complexity ${pr.complexity||br.complexity||1}/5 · ${pr.cloud?'cloud':'local'}`;
   }catch(e){chatTranscript.push({role:'system',text:'Error: '+e.message});renderChat();}
-  finally{setBusy(btn,false);}
+  finally{chatSending=false;byId('chat-clear').disabled=false;byId('chat-history').disabled=false;setBusy(btn,false);}
+}
+
+async function loadConversations(restore=true){
+  const rows=await API.get('/api/conversations');
+  const select=byId('chat-history');
+  select.innerHTML='<option value="">New conversation</option>'+rows.map(x=>`<option value="${esc(x.id)}">${esc(x.title)}</option>`).join('');
+  if(restore && !chatConversationId && rows.length)chatConversationId=rows[0].id;
+  select.value=chatConversationId;
+  if(restore && chatConversationId)await restoreConversation();
+}
+async function restoreConversation(){
+  if(chatSending)return;
+  chatConversationId=byId('chat-history').value;
+  try{chatTranscript=chatConversationId?(await API.get('/api/chat/history?id='+encodeURIComponent(chatConversationId))).messages:[];renderChat();}
+  catch(e){toast(e.message,'bad');}
 }
 
 async function initTasks(){byId('task-plan').onclick=()=>taskAction(false);byId('task-run').onclick=()=>taskAction(true);byId('tasks-refresh').onclick=loadTaskLists;await loadTaskLists();}
 async function taskAction(run){const text=byId('task-input').value.trim();if(!text)return toast('Enter a task first','bad');const btn=byId(run?'task-run':'task-plan');setBusy(btn,true,run?'Running':'Planning');try{const r=await API.post(run?'/api/task':'/api/plan',{text});jsonBox('task-output',r);toast(run?'Task submitted':'Plan created','ok');await loadTaskLists();}catch(e){jsonBox('task-output','Error: '+e.message);}finally{setBusy(btn,false);}}
-async function loadTaskLists(){const [t,a]=await Promise.all([API.get('/api/tasks?limit=50'),API.get('/api/approvals?status=pending')]);byId('tasks-table').innerHTML=(t||[]).map(x=>`<tr><td>${badge(x.status,statusTone(x.status))}</td><td>${esc(short(x.request,150))}</td><td class="mono">${esc(x.id||x.task_id||'')}</td><td>${fmtDate(x.created_at||x.ts)}</td></tr>`).join('')||'<tr><td colspan="4">No tasks yet.</td></tr>';byId('task-approvals').innerHTML=(a||[]).map(x=>`<div class="data-row"><div><div class="data-title">${esc(x.action||x.step_id||'Pending step')}</div><div class="data-meta mono">${esc(x.id)}</div></div>${badge('Pending','warn')}</div>`).join('')||renderEmpty('No pending approvals.');}
+async function loadTaskLists(){const [t,a]=await Promise.all([API.get('/api/tasks?limit=50'),API.get('/api/approvals?status=pending')]);byId('tasks-table').innerHTML=(t||[]).map(x=>`<tr><td>${badge(x.status,statusTone(x.status))}</td><td><button class="btn small" data-task-open="${esc(x.id)}">${esc(short(x.request,150))}</button></td><td class="mono">${esc(x.id||x.task_id||'')}</td><td>${fmtDate(x.created_at||x.ts)}</td></tr>`).join('')||'<tr><td colspan="4">No tasks yet.</td></tr>';byId('task-approvals').innerHTML=(a||[]).map(x=>`<div class="data-row"><div><div class="data-title">${esc(x.action||x.step_id||'Pending step')}</div><div class="data-meta mono">${esc(x.id)}</div></div>${badge('Pending','warn')}</div>`).join('')||renderEmpty('No pending approvals.');document.querySelectorAll('[data-task-open]').forEach(b=>b.onclick=async()=>{try{jsonBox('task-output',await API.get('/api/task?id='+encodeURIComponent(b.dataset.taskOpen)));}catch(e){toast(e.message,'bad');}});}
 
 async function initBrain(){byId('brain-refresh').onclick=loadBrain;byId('brain-route').onclick=inspectBrainRoute;await loadBrain();}
 async function loadBrain(){const s=await API.get('/api/brain');byId('brain-mode').textContent=String(s.mode||'local-first').toUpperCase();byId('brain-models').textContent=s.detected_models??0;byId('brain-pairs').textContent=s.tracked_model_task_pairs??0;byId('brain-decisions').textContent=s.recorded_decisions??0;const perf=s.performance||[];byId('brain-performance').innerHTML=perf.map(x=>`<tr><td><b>${esc(x.model)}</b></td><td>${badge(x.task_type,'info')}</td><td>${x.attempts??0}</td><td>${x.success_rate==null?'—':(x.success_rate*100).toFixed(0)+'%'}</td><td>${fmtMs(x.avg_success_latency_ms)}</td><td>${badge(x.last_status||'—',statusTone(x.last_status))}</td></tr>`).join('')||'<tr><td colspan="6">No measured model outcomes yet. Use AI Chat to build local performance history.</td></tr>';const hist=s.recent_decisions||[];byId('brain-history').innerHTML=hist.map(x=>`<tr><td>${badge(x.status,statusTone(x.status))}</td><td>${esc(x.intent)}</td><td>${x.complexity}/5</td><td>${esc(x.selected_model||'—')}</td><td>${fmtMs(x.latency_ms)}</td><td>${fmtDate(x.ts)}</td></tr>`).join('')||'<tr><td colspan="6">No completed routing decisions yet.</td></tr>';}
@@ -183,7 +203,7 @@ async function loadProviderModels(force){const provider=byId('provider-model-pro
 async function saveProviderDefault(){const provider=byId('provider-model-provider').value,task_type=byId('provider-default-task').value,model=byId('provider-default-model').value;if(!model)return toast('Select a discovered model first','bad');const btn=byId('provider-default-save');setBusy(btn,true,'Saving');try{await API.post('/api/provider/default-model',{provider,task_type,model});toast(`Default saved for ${provider} / ${task_type}`,'ok');}catch(e){toast(e.message,'bad');}finally{setBusy(btn,false);}}
 
 async function initModels(){byId('models-refresh').onclick=loadModelsPage;byId('model-test').onclick=testModel;await loadModelsPage();}
-async function loadModelsPage(){const s=await API.get('/api/models');const items=s.items||[];byId('model-count').textContent=items.length;byId('model-online').textContent=s.online?'ONLINE':'OFFLINE';byId('model-online').className=s.online?'metric-value good':'metric-value danger-text';byId('model-table').innerHTML=items.map(m=>`<tr><td><b>${esc(m.name)}</b></td><td>${badge(m.kind||'unknown','info')}</td><td>${fmtBytes(m.size)}</td><td>${fmtDate(m.modified_at)}</td></tr>`).join('')||'<tr><td colspan="4">No Ollama models detected.</td></tr>';byId('model-select').innerHTML='<option value="">Smart auto-select</option>'+items.filter(m=>m.kind!=='embedding').map(m=>`<option value="${esc(m.name)}">${esc(m.name)}</option>`).join('');}
+async function loadModelsPage(){const s=await API.get('/api/models');const items=s.items||[];byId('model-count').textContent=items.length;byId('model-online').textContent=s.online?'ONLINE':'OFFLINE';byId('model-online').className=s.online?'metric-value good':'metric-value danger-text';byId('model-table').innerHTML=items.map(m=>`<tr><td><b>${esc(m.name)}</b></td><td>${badge(m.kind||'unknown','info')}</td><td>${fmtBytes(m.size)}</td><td>${fmtDate(m.modified_at)}</td></tr>`).join('')||'<tr><td colspan="4">No Ollama models detected.</td></tr>';byId('model-select').innerHTML='<option value="">Smart auto-select</option>'+items.filter(m=>m.kind!=='embedding' && m.kind!=='cloud-through-ollama').map(m=>`<option value="${esc(m.name)}">${esc(m.name)}</option>`).join('');}
 async function testModel(){const text=byId('model-prompt').value.trim();if(!text)return toast('Enter a test prompt','bad');const btn=byId('model-test');setBusy(btn,true,'Testing');try{const body={text,task_type:byId('model-type').value,provider:'ollama'};if(byId('model-select').value)body.model=byId('model-select').value;const r=await API.post('/api/chat',body);jsonBox('model-output',r);}catch(e){jsonBox('model-output','Error: '+e.message);}finally{setBusy(btn,false);}}
 
 async function initAgents(){byId('cap-search-btn').onclick=loadCapabilities;byId('cap-run-btn').onclick=runCapability;const s=await API.get('/api/status');byId('cap-source').innerHTML='<option value="">All sources</option>'+(s.adapters||[]).map(a=>`<option value="${esc(a.name)}">${esc(a.details?.label||a.name)}</option>`).join('');byId('agent-sources').innerHTML=(s.adapters||[]).map(a=>`<div class="source-card"><div class="split between"><strong>${esc(a.details?.label||a.name)}</strong>${badge(a.connected?'Connected':'Missing',a.connected?'ok':'bad')}</div><div class="data-meta">${esc(a.details?.role||'')}</div></div>`).join('');await loadCapabilities();}
@@ -202,13 +222,13 @@ async function searchMemory(){const q=byId('memory-q').value,ns=byId('memory-fil
 async function saveMemory(){const content=byId('memory-content').value.trim();if(!content)return toast('Memory content is required','bad');const btn=byId('memory-save');setBusy(btn,true,'Saving');try{const r=await API.post('/api/memory',{title:byId('memory-title').value,namespace:byId('memory-ns').value||'general',content});toast('Memory saved: '+(r.id||''),'ok');byId('memory-content').value='';await searchMemory();}catch(e){toast(e.message,'bad');}finally{setBusy(btn,false);}}
 
 async function initAutomation(){byId('automation-create').onclick=createAutomation;byId('automation-refresh').onclick=loadAutomations;await loadAutomations();}
-async function loadAutomations(){const a=await API.get('/api/automations');byId('automation-list').innerHTML=(a||[]).map(x=>`<div class="data-row"><div class="data-main"><div class="data-title">${esc(x.name)}</div><div class="data-meta">Every ${esc(x.interval_seconds)} sec · last: ${fmtDate(x.last_run)}<br>${esc(short(x.prompt,160))}</div></div><div class="data-actions">${badge(x.enabled?'Enabled':'Paused',x.enabled?'ok':'warn')}<button class="btn small" onclick="toggleAutomation('${esc(x.id)}',${!x.enabled})">${x.enabled?'Pause':'Enable'}</button></div></div>`).join('')||renderEmpty('No automations configured.');}
+async function loadAutomations(){const a=await API.get('/api/automations');byId('automation-list').innerHTML=(a||[]).map(x=>`<div class="data-row"><div class="data-main"><div class="data-title">${esc(x.name)}</div><div class="data-meta">Every ${esc(x.interval_seconds)} sec · last: ${fmtDate(x.last_run)}<br>${esc(short(x.prompt,160))}<br>Last result: ${esc(x.metadata?.last_status||'Not run')}${x.metadata?.last_error?' · '+esc(x.metadata.last_error):''}</div></div><div class="data-actions">${badge(x.enabled?'Enabled':'Paused',x.enabled?'ok':'warn')}<button class="btn small" onclick="toggleAutomation('${esc(x.id)}',${!x.enabled})">${x.enabled?'Pause':'Enable'}</button></div></div>`).join('')||renderEmpty('No automations configured.');}
 async function createAutomation(){const name=byId('automation-name').value.trim(),prompt=byId('automation-prompt').value.trim();if(!name||!prompt)return toast('Name and task are required','bad');const btn=byId('automation-create');setBusy(btn,true,'Creating');try{await API.post('/api/automation',{name,prompt,interval_seconds:Number(byId('automation-interval').value||3600),enabled:true});toast('Automation created','ok');await loadAutomations();}catch(e){toast(e.message,'bad');}finally{setBusy(btn,false);}}
 async function toggleAutomation(id,enabled){try{await API.post('/api/automation/toggle',{id,enabled});await loadAutomations();}catch(e){toast(e.message,'bad');}}
 window.toggleAutomation=toggleAutomation;
 
 async function initComputer(){byId('proc-btn').onclick=()=>computerAction('system.processes.list',{},'computer-output');byId('svc-btn').onclick=()=>computerAction('system.services.list',{},'computer-output');byId('ring-ping').onclick=()=>computerAction('ring0.ping',{},'ring-output');byId('ring-status').onclick=()=>computerAction('ring0.status',{},'ring-output');byId('service-query').onclick=()=>computerAction('service.query',{resource_id:'ollama'},'service-output');byId('file-read').onclick=()=>computerAction('workspace.file.read',{path:byId('file-path').value},'file-output');byId('file-write').onclick=()=>computerAction('workspace.file.write',{path:byId('file-path').value,content:byId('file-content').value},'file-output');byId('url-open').onclick=()=>computerAction('url.open',{url:byId('url-value').value},'url-output');const b=await API.get('/api/broker');byId('broker-actions').innerHTML=(b.configured_actions||[]).map(x=>badge(x,'info')).join(' ');byId('broker-secret').textContent=b.approval_secret_configured?'Configured':'Not configured';}
-async function computerAction(action_id,parameters,target){try{const r=await API.post('/api/system/action',{action_id,parameters});jsonBox(target,r);if(r.status==='approval_required')toast('This high-risk action requires the external trusted approval proof.','bad');}catch(e){jsonBox(target,'Error: '+e.message);}}
+async function computerAction(action_id,parameters,target){return typedOperator(action_id,parameters,target);}
 
 async function initSecurity(){byId('security-refresh').onclick=loadSecurity;await loadSecurity();}
 async function loadSecurity(){const [a,r,b]=await Promise.all([API.get('/api/approvals?status=pending'),API.get('/api/receipts?limit=80'),API.get('/api/broker')]);byId('security-approvals-count').textContent=(a||[]).length;byId('security-chain').textContent=r.chain?.ok?'VERIFIED':'FAILED';byId('security-secret').textContent=b.approval_secret_configured?'READY':'MISSING';byId('security-approvals').innerHTML=(a||[]).map(x=>`<div class="data-row"><div class="data-main"><div class="data-title">${esc(x.action||x.step_id||'Pipeline approval')}</div><div class="data-meta mono">${esc(x.id)}<br>${esc(short(JSON.stringify(x),180))}</div></div><div class="data-actions"><button class="btn small success" onclick="resolveApproval('${esc(x.id)}','approved')">Approve</button><button class="btn small danger" onclick="resolveApproval('${esc(x.id)}','rejected')">Reject</button></div></div>`).join('')||renderEmpty('No pending pipeline approvals.');byId('receipts-table').innerHTML=(r.items||[]).map(x=>`<tr><td>${fmtDate(x.created_at||x.ts)}</td><td>${esc(x.source||'')}</td><td>${badge(x.status,statusTone(x.status))}</td><td class="mono">${esc(short(x.id,24))}</td><td class="mono">${esc(short(x.hash,18))}</td></tr>`).join('')||'<tr><td colspan="5">No receipts.</td></tr>';byId('broker-posture').textContent=JSON.stringify(b,null,2);}
@@ -216,7 +236,11 @@ async function resolveApproval(id,status){try{const r=await API.post('/api/appro
 window.resolveApproval=resolveApproval;
 
 async function initHealth(){byId('doctor-run').onclick=loadDoctor;await loadDoctor();}
-async function loadDoctor(){const btn=byId('doctor-run');setBusy(btn,true,'Checking');try{const r=await API.get('/api/doctor');const entries=Object.entries(r||{});byId('doctor-grid').innerHTML=entries.map(([k,v])=>{const raw=typeof v==='object'?JSON.stringify(v):String(v);const tone=statusTone(raw);return `<div class="card metric-card span-3"><div class="metric-label">${esc(k.replaceAll('_',' '))}</div><div style="margin-top:9px">${badge(short(raw,34),tone)}</div><div class="metric-note">${esc(short(raw,120))}</div></div>`;}).join('');jsonBox('doctor-raw',r);}catch(e){jsonBox('doctor-raw','Error: '+e.message);}finally{setBusy(btn,false);}}
+async function loadDoctor(){
+ const btn=byId('doctor-run');setBusy(btn,true,'Checking');
+ try{const r=await API.get('/api/doctor');byId('doctor-grid').innerHTML=(r.checks||[]).map(c=>`<div class="card metric-card span-3"><div class="metric-label">${esc(c.name)}</div><div style="margin-top:9px">${badge(c.ok?'Ready':'Needs setup',c.ok?'ok':c.level==='required'?'bad':'warn')}</div><div class="metric-note">${esc(c.detail)} · ${esc(c.level)}</div></div>`).join('');jsonBox('doctor-raw',r);}
+ catch(e){jsonBox('doctor-raw','Error: '+e.message);}finally{setBusy(btn,false);}
+}
 
 async function initActivity(){byId('activity-refresh').onclick=loadActivity;byId('activity-filter').addEventListener('input',loadActivity);await loadActivity();}
 async function loadActivity(){const rows=await API.get('/api/events?limit=300'),q=byId('activity-filter').value.trim().toLowerCase();const filtered=(rows||[]).filter(x=>!q||String(x.kind).toLowerCase().includes(q)||JSON.stringify(x.payload||{}).toLowerCase().includes(q)).reverse();byId('activity-count').textContent=filtered.length;byId('activity-list').innerHTML=filtered.map(x=>`<div class="data-row"><div class="data-main"><div class="data-title">${esc(x.kind)}</div><div class="data-meta mono">${esc(short(JSON.stringify(x.payload||{}),320))}</div></div><span class="small muted nowrap">${fmtDate(x.created_at||x.ts)}</span></div>`).join('')||renderEmpty('No matching events.');}

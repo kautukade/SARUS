@@ -11,17 +11,19 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import socket
+import ipaddress
 import subprocess
 import sys
 import time
+import urllib.request
 
 from . import updater
 
 
 ROOT = Path(__file__).resolve().parents[1]
-HOST = "127.0.0.1"
-PORT = int(os.environ.get("JUBI_PORT") or "8877")
+HOST = (os.environ.get('JUBI_HOST') or os.environ.get('SARUS_HOST') or '127.0.0.1').strip().lower()
+PORT = int(os.environ.get('JUBI_PORT') or os.environ.get('SARUS_PORT') or '8877')
+URL = f'http://[{HOST}]:{PORT}' if ':' in HOST else f'http://{HOST}:{PORT}'
 
 
 def _load_bootstrap() -> dict:
@@ -48,9 +50,11 @@ def _log(message: str) -> None:
 
 def _listening(timeout: float = 0.4) -> bool:
     try:
-        with socket.create_connection((HOST, PORT), timeout=timeout):
-            return True
-    except OSError:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(URL + '/api/health', timeout=timeout) as response:
+            payload = json.loads(response.read(4096))
+            return payload.get('product') == 'Jubi' and payload.get('status') == 'ok'
+    except (OSError, ValueError, AttributeError):
         return False
 
 
@@ -125,8 +129,11 @@ def _start_repair(*, full: bool) -> subprocess.Popen | None:
 
 
 def main() -> int:
-    if os.environ.get("JUBI_HOST") == "0.0.0.0":
-        _log("Refusing unsafe JUBI_HOST=0.0.0.0; Jubi remains localhost-only.")
+    try:
+        if HOST != 'localhost' and not ipaddress.ip_address(HOST).is_loopback:
+            raise ValueError('non-local host')
+    except ValueError:
+        _log('Jubi background agent requires a loopback JUBI_HOST.')
         return 4
 
     cfg = _load_bootstrap().get("background") or {}
@@ -179,6 +186,7 @@ def main() -> int:
                     info = updater.check_for_update()
                     if info.get("available"):
                         _log(f"Verified Jubi update found: {info.get('remote_commit')}.")
+                        installer = updater.download_update(info)
                         _stop_server(child)
                         child = None
                         if repair_process is not None and repair_process.poll() is None:
@@ -188,7 +196,7 @@ def main() -> int:
                             except Exception:
                                 pass
                             repair_process = None
-                        result = updater.apply_update(info)
+                        result = updater.apply_update(info, installer=installer)
                         if result == 0:
                             _log("Jubi update installed successfully; restarting supervisor through bootstrap loop.")
                             return 75

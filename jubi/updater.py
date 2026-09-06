@@ -31,7 +31,7 @@ _ALLOWED_DOWNLOAD_HOST_SUFFIXES = (
 
 def _load_json(path: Path) -> dict:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError):
         return {}
 
@@ -127,6 +127,8 @@ def check_for_update() -> dict:
     remote_commit = str(manifest.get("commit_sha") or "").strip().lower()
     remote_hash = str(manifest.get("installer_sha256") or "").strip().lower()
     remote_epoch = int(manifest.get("build_epoch") or 0)
+    if remote_epoch <= 0:
+        raise RuntimeError('Update manifest build epoch is missing or invalid.')
     if len(remote_commit) != 40 or any(c not in "0123456789abcdef" for c in remote_commit):
         raise RuntimeError("Update manifest commit SHA is invalid.")
     if len(remote_hash) != 64 or any(c not in "0123456789abcdef" for c in remote_hash):
@@ -191,10 +193,12 @@ def download_update(info: dict) -> Path:
     return target
 
 
-def apply_update(info: dict) -> int:
+def apply_update(info: dict, installer: Path | None = None) -> int:
     if os.name != "nt":
         raise RuntimeError("Jubi installer updates can only be applied on Windows.")
-    installer = download_update(info)
+    installer = installer or download_update(info)
+    if _sha256(installer) != str(info['installer_sha256']).lower():
+        raise RuntimeError('Installer changed after update verification')
     args = [
         str(installer),
         "/VERYSILENT",

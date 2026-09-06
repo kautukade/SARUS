@@ -68,7 +68,8 @@ class NetworkVisionUITests(unittest.TestCase):
         ):
             self.assertIn(endpoint, server)
         self.assertIn('MAX_VISION_BODY', server)
-        self.assertIn("host == '0.0.0.0'", server)
+        self.assertIn('loopback_host', server)
+        self.assertIn('ipaddress.ip_address(host).is_loopback', server)
 
 
 if __name__ == '__main__':

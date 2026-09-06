@@ -88,8 +88,8 @@ try {
     if (-not [Environment]::Is64BitOperatingSystem) { throw 'Jubi requires 64-bit Windows.' }
     if (-not (Test-InstallRootWritable)) { throw 'Jubi install directory is not writable even with installer elevation.' }
     if (-not (Test-Path -LiteralPath (Join-Path $Root 'sarus\server.py'))) { throw 'Jubi foundation payload is incomplete.' }
-    if (-not (Test-Path -LiteralPath (Join-Path $Root 'vendor\launcher\SARUS.exe.b64'))) { throw 'Bundled verified launcher payload is missing.' }
-    if (-not (Test-Path -LiteralPath (Join-Path $Root 'vendor\launcher\SHA256.txt'))) { throw 'Bundled launcher checksum is missing.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $Root 'installer\JubiLauncher.cs'))) { throw 'Jubi launcher source is missing.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $Root 'installer\BUILD-LAUNCHER.ps1'))) { throw 'Jubi launcher build script is missing.' }
     if (-not (Test-Path -LiteralPath (Join-Path $Root 'config\production.json'))) { throw 'Production profile is missing.' }
     if (-not (Test-Path -LiteralPath (Join-Path $Root 'config\bootstrap.json'))) { throw 'One-click bootstrap profile is missing.' }
 
@@ -168,7 +168,7 @@ try {
 
     Log 'Running target-machine production certification (core profile).'
     try {
-        Invoke-JubiPowerShell $Certifier @() 'certify-initial'
+        Invoke-JubiPowerShell $Certifier @('-CoreOnly') 'certify-initial'
     }
     catch {
         Log "Certification found a repairable problem; running one automatic repair cycle. $($_.Exception.Message)"
@@ -176,7 +176,7 @@ try {
         $certRepairArgs = @('-NonInteractive','-NoLaunch','-RepairMode')
         if ($UpdateMode) { $certRepairArgs += '-UpdateMode' }
         Invoke-JubiPowerShell $Installer $certRepairArgs 'certify-core-repair'
-        Invoke-JubiPowerShell $Certifier @() 'certify-final'
+        Invoke-JubiPowerShell $Certifier @('-CoreOnly') 'certify-final'
     }
 
     Log 'Registering Jubi to start with Windows, self-restart on failure and check verified updates automatically.'

@@ -189,6 +189,7 @@ class ProviderManagerTests(unittest.TestCase):
         self.assertTrue(any(x['provider'] == 'nvidia' and x['successes'] == 1 for x in perf))
 
     def test_explicit_provider_routes_only_to_that_provider(self):
+        self.manager.set_mode('hybrid_auto')
         result = self.manager.generate('Write a friendly greeting.', provider='huggingface')
         self.assertEqual(result['jubi_provider_route']['provider'], 'huggingface')
         self.assertEqual(len(self.cloud['huggingface'].calls), 1)
