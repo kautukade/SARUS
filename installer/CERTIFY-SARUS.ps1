@@ -1,6 +1,7 @@
 param(
     [switch]$RequireSignedApp,
-    [switch]$RequireRing0
+    [switch]$RequireRing0,
+    [switch]$CoreOnly
 )
 $ErrorActionPreference = 'Stop'
 
@@ -19,6 +20,7 @@ Push-Location $Root
 try {
     $args = @('-m', 'jubi.acceptance', '--full')
     if ($RequireRing0) { $args += '--require-ring0' }
+    if ($CoreOnly) { $args += '--core-only' }
     $acceptanceText = (& $Python @args 2>&1) -join "`n"
     $acceptanceExit = $LASTEXITCODE
     try { $acceptance = $acceptanceText | ConvertFrom-Json } catch { $acceptance = @{ ok = $false; parse_error = $_.Exception.Message; raw = $acceptanceText } }
@@ -64,8 +66,9 @@ try {
         generated_at = (Get-Date).ToUniversalTime().ToString('o')
         root = $Root
         core_ready = [bool]$coreReady
+        profile = if ($CoreOnly) { 'core' } else { 'full' }
         strict_ready = [bool]$strictReady
-        public_release_ready = [bool]($coreReady -and $appSigned -and ((-not $driverBundled) -or $driverSigned))
+        public_release_ready = [bool]($coreReady -and (-not $CoreOnly) -and $appSigned -and ((-not $driverBundled) -or $driverSigned))
         require_signed_app = [bool]$RequireSignedApp
         require_ring0 = [bool]$RequireRing0
         acceptance = $acceptance
@@ -85,6 +88,7 @@ try {
         missing_required_files = $missingFiles
         notes = @(
             'core_ready certifies the installed Jubi application checks on this machine.',
+            'The core profile reports missing SARA native runtime without certifying native SARA actions. Full certification remains required for public_release_ready.',
             'public_release_ready also requires a valid Authenticode signature on Jubi.exe and, when a driver binary is bundled, a valid driver signature.',
             'The SarusRing0 driver name is a legacy compatibility ABI retained during Jubi Phase 0.',
             'Original Fable QEMU readiness is reported by Jubi Doctor/Fable status and is optional for the normal Windows host runtime.'

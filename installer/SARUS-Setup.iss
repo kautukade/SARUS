@@ -42,7 +42,7 @@ VersionInfoCopyright=Copyright (c) 2026 ITCYBER TECHNOLOGIES PVT LTD
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-Source: "..\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: ".git\*,dist-installer\*,.sarus-venv\*,logs\*,data\*,*.pyc"
+Source: "..\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: ".git\*,dist-installer\*,.sarus-venv\*,.venv\*,node_modules\*,logs\*,data\*,workspace\*,.audit\*,*.pyc,.env,.env.local,*.key,*.secret"
 
 [Icons]
 Name: "{autoprograms}\Jubi"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"

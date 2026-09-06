@@ -6,6 +6,8 @@
 
 Jubi is the evolving product built on the stabilized SARUS foundation. User-facing runtime, dashboard and installer are Jubi; selected internal `sarus/` paths, installer helper names, the physical `data/sarus.db` filename and the narrow `SarusRing0` ABI are intentionally retained until a target-tested migration can change them safely.
 
+The functional repair branch adds persistent chat, stricter local routing, truthful execution status and live HTTP/DOM regression coverage. See [the detailed functional audit](docs/FUNCTIONAL-AUDIT.md) for what was verified and [the validation runbook](docs/VALIDATION-RUNBOOK.md) for target-machine setup. Existing release assets do not contain these changes until this branch is merged and a new installer is built.
+
 ## Download & one-click install
 
 The recommended Windows installation method is the packaged installer:
@@ -32,6 +34,8 @@ A normal user should not need to manually prepare the development environment. `
 10. run post-install verification before launching Jubi.
 
 The installer currently targets Windows 10/11 x64. Internet access is required when prerequisites or Ollama models must be downloaded.
+
+The launcher now builds from `installer/JubiLauncher.cs` using the Windows .NET Framework compiler. The checked-in legacy launcher Base64 payload is incomplete and is no longer an installation dependency. The SARA native bundle is also incomplete (16 of 24 parts). Core installation reports this missing runtime and continues; natural-language SARA computer/development actions remain blocked until its verified runtime and token are configured. Full production acceptance still requires SARA according to `config/production.json`; core installation uses an explicitly labelled core certification profile.
 
 ### Background operation
 
@@ -228,6 +232,8 @@ data/sarus.db
 
 Jubi-owned state includes memory, semantic knowledge, experiences, tasks, approvals, automations, events, receipts, Brain/provider performance, Council/Supervisor history, research history, Fable state and authorized-network observations.
 
+Chat conversations and complete successful turns are also persisted. The dashboard restores recent conversations after reload. Each follow-up supplies bounded context from that conversation through the same provider privacy rules.
+
 SQLite uses WAL, busy timeout, foreign keys and explicit commit/rollback transactions.
 
 ## Run from source
@@ -250,6 +256,13 @@ cd JUBI
 Start Jubi:
 
 ```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m jubi.server
+```
+
+Or double-click `START_JUBI.bat`, which detects the installed private runtime, `.venv`, or Python 3.11+. The core Python server has no third-party Python dependencies. With Python already selected on another supported development platform:
+
+```sh
 python -m jubi.server
 ```
 
@@ -264,6 +277,17 @@ Run acceptance:
 ```powershell
 python -m jubi.acceptance --full
 ```
+
+Run the added functional checks in a development checkout:
+
+```sh
+python tests/jubi_functional_regression_test.py
+python tests/jubi_http_functional_test.py
+npm ci --ignore-scripts --no-audit --no-fund
+npm test
+```
+
+Node/jsdom is only a test dependency. The HTTP and DOM suites start isolated databases and a local controlled Ollama test service; passing them does not certify live model inference, browser rendering or Windows integration.
 
 ## CI validation
 

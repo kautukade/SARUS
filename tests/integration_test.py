@@ -9,9 +9,9 @@ from sarus.core.app import Sarus
 class T(unittest.TestCase):
  @classmethod
  def setUpClass(cls):
-  cls.app=Sarus(ROOT); cls.orig_generate=cls.app.models.generate_text; cls.app.models.generate_text=lambda prompt,task_type='general',system='',model=None,timeout=300: f'MOCK_OK[{task_type}] '+prompt[:160]
+  cls.app=Sarus(ROOT); cls.orig_generate=cls.app.providers.generate; cls.app.providers.generate=lambda prompt,*a,**kw: {'response':'TEST_MODEL_RESPONSE '+prompt[:160]}; cls.app.research.research=lambda *a,**kw: {'answer':'TEST_RESEARCH_RESPONSE','sources':[{'url':'https://example.com/'}]}; cls.app.adapters.get('sara').token='test-native'; cls.app.adapters.get('sara')._call=lambda *a,**kw: {'ok':True,'status':'completed'}
  @classmethod
- def tearDownClass(cls): cls.app.models.generate_text=cls.orig_generate; SAFE_FILE.unlink(missing_ok=True)
+ def tearDownClass(cls): cls.app.providers.generate=cls.orig_generate; cls.app.shutdown(); SAFE_FILE.unlink(missing_ok=True)
  def test_01_all_10_sources_connected(self):
   s=self.app.status(); self.assertEqual(len(s['adapters']),10); self.assertTrue(all(a['connected'] for a in s['adapters']))
  def test_02_registry_exact_original_file_count(self):

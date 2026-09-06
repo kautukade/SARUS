@@ -93,7 +93,8 @@ class UnifiedDashboardTests(unittest.TestCase):
         js = (WEB / 'assets/app.js').read_text(encoding='utf-8')
         knowledge_js = (WEB / 'assets/knowledge.js').read_text(encoding='utf-8')
         council_js = (WEB / 'assets/council.js').read_text(encoding='utf-8')
-        combined = js + '\n' + knowledge_js + '\n' + council_js
+        operator_js = (WEB / 'assets/operator.js').read_text(encoding='utf-8')
+        combined = js + '\n' + knowledge_js + '\n' + council_js + '\n' + operator_js
         for endpoint in (
             '/api/status', '/api/models', '/api/chat', '/api/brain', '/api/brain/route',
             '/api/council/run', '/api/council', '/api/supervisor/plan', '/api/supervisor/run', '/api/supervisor',
@@ -131,7 +132,7 @@ class UnifiedDashboardTests(unittest.TestCase):
         self.assertIn("'/api/supervisor/run'", server)
         self.assertIn("'/api/providers'", server)
         self.assertIn("'/api/provider/credential'", server)
-        self.assertIn('APP.providers.generate', server)
+        self.assertIn('APP.conversations.send', server)
         self.assertIn("'/api/knowledge/status'", server)
         self.assertIn("'/api/knowledge/ask'", server)
         self.assertIn("'/api/experience/stats'", server)

@@ -1,32 +1,36 @@
 """Legacy native-launcher compatibility entry for Jubi v0.1.0.
 
-The verified SARUS-era PE launcher may still look for ``SARUS-script.pyw``.
-Rather than relying on an installer-time rewrite, keep this tracked script
-functional and route it to the canonical Jubi server entry point.
+The source-built Jubi launcher invokes ``SARUS-script.pyw`` for compatibility.
+This tracked script starts the canonical Jubi server and opens its dashboard
+only after its product health endpoint responds.
 """
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
-import socket
 import subprocess
 import sys
 import time
 import webbrowser
+import ipaddress
+import urllib.request
 
 
 ROOT = Path(__file__).resolve().parent
-HOST = os.environ.get('JUBI_HOST') or os.environ.get('SARUS_HOST') or '127.0.0.1'
+HOST = (os.environ.get('JUBI_HOST') or os.environ.get('SARUS_HOST') or '127.0.0.1').strip().lower()
 PORT = int(os.environ.get('JUBI_PORT') or os.environ.get('SARUS_PORT') or '8877')
-URL = f'http://{HOST}:{PORT}'
+URL = f'http://[{HOST}]:{PORT}' if ':' in HOST else f'http://{HOST}:{PORT}'
 
 
 def _listening(timeout: float = 0.35) -> bool:
     try:
-        with socket.create_connection((HOST, PORT), timeout=timeout):
-            return True
-    except OSError:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(URL + '/api/health', timeout=timeout) as response:
+            import json
+            result = json.loads(response.read(4096))
+            return result.get('product') == 'Jubi' and result.get('status') == 'ok'
+    except (OSError, ValueError, AttributeError):
         return False
 
 
@@ -44,7 +48,7 @@ def _runtime() -> Path:
 
 
 def main() -> None:
-    if HOST == '0.0.0.0':
+    if HOST != 'localhost' and not ipaddress.ip_address(HOST).is_loopback:
         raise SystemExit('Jubi Phase 0 is localhost-only; JUBI_HOST=0.0.0.0 is not allowed.')
 
     if not _listening():
@@ -67,6 +71,8 @@ def main() -> None:
         while time.time() < deadline and not _listening():
             time.sleep(0.25)
 
+    if not _listening(timeout=2):
+        raise SystemExit('Jubi did not start. Run START_JUBI.bat to see the startup error.')
     webbrowser.open(URL)
 
 

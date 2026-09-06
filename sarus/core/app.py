@@ -4,6 +4,7 @@ from .events import EventBus
 from .models import OllamaRouter
 from .brain import BrainRouter
 from .providers import ProviderManager
+from .conversations import ConversationStore
 from .knowledge import SemanticKnowledge
 from .experience import ExperienceEngine
 from .council import AICouncil, MultiAgentSupervisor
@@ -38,6 +39,7 @@ class Jubi:
         self.models = OllamaRouter(root / 'config/models.json')
         self.brain = BrainRouter(self.db_path, self.models, root / 'config/brain.json', self.bus)
         self.providers = ProviderManager(self.db_path, self.brain, root / 'config/providers.json', self.bus)
+        self.conversations = ConversationStore(self.db_path, self.providers)
         self.knowledge = SemanticKnowledge(self.db_path, self.models, self.providers, self.bus)
         self.experience = ExperienceEngine(self.db_path, self.models, self.bus)
         self.council = AICouncil(self.db_path, self.brain, self.providers, self.bus)

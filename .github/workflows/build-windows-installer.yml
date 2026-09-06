@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - 'agent/**'
+      - 'fix/**'
   pull_request:
     paths:
       - 'installer/**'
@@ -72,6 +73,8 @@ jobs:
             'installer\JUBI-BACKGROUND.ps1',
             'installer\REGISTER-JUBI-BACKGROUND.ps1',
             'installer\UNREGISTER-JUBI-BACKGROUND.ps1',
+            'installer\BUILD-LAUNCHER.ps1',
+            'scripts\VERIFY-SARUS-REPO.ps1',
             'installer\INSTALL-SARUS.ps1',
             'installer\EXE-INSTALL.ps1',
             'installer\SETUP-BROKER.ps1',
@@ -79,8 +82,8 @@ jobs:
             'installer\SIGN-RELEASE.ps1',
             'installer\UNINSTALL-SARUS.ps1',
             'installer\SARUS-Setup.iss',
-            'vendor\launcher\SARUS.exe.b64',
-            'vendor\launcher\SHA256.txt',
+            'installer\JubiLauncher.cs',
+            'installer\BUILD-LAUNCHER.ps1',
             'config\models.json',
             'config\broker_allowlist.json',
             'config\online_sources.json',
@@ -95,6 +98,8 @@ jobs:
             'installer\JUBI-BACKGROUND.ps1',
             'installer\REGISTER-JUBI-BACKGROUND.ps1',
             'installer\UNREGISTER-JUBI-BACKGROUND.ps1',
+            'installer\BUILD-LAUNCHER.ps1',
+            'scripts\VERIFY-SARUS-REPO.ps1',
             'installer\INSTALL-SARUS.ps1',
             'installer\EXE-INSTALL.ps1',
             'installer\SETUP-BROKER.ps1',
@@ -135,6 +140,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Production readiness tests failed.' }
           python tests\fable_integration_test.py
           if ($LASTEXITCODE -ne 0) { throw 'Fable integration tests failed.' }
+
+      - name: Compile source launcher and verify core payload
+        shell: powershell
+        run: .\scripts\VERIFY-SARUS-REPO.ps1
 
       - name: Locate or install Inno Setup
         id: inno

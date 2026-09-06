@@ -242,7 +242,27 @@ class MultiAgentSupervisor:
                 'steps': [{'id': 'S1', 'role': classification['task_type'] if classification['task_type'] in self.ROLE_SYSTEMS else 'general', 'task': request, 'deliverable': 'Completed specialist response', 'depends_on': [], 'risk': 'medium'}],
                 'verification': ['Review the result against the original request.'],
             }
-        parsed['steps'] = parsed['steps'][:8]
+        valid = []
+        for index, step in enumerate(parsed['steps'][:8], 1):
+            if not isinstance(step, dict) or not isinstance(step.get('task'), str) or not step['task'].strip():
+                raise RuntimeError('Planner returned an invalid step. Please retry planning.')
+            sid = str(step.get('id') or f'S{index}')
+            dependencies = step.get('depends_on') or []
+            if not isinstance(dependencies, list) or not all(isinstance(x, str) for x in dependencies):
+                raise RuntimeError('Planner returned invalid step dependencies')
+            valid.append({**step, 'id': sid, 'depends_on': dependencies})
+        ids = {step['id'] for step in valid}
+        if not valid or len(ids) != len(valid):
+            raise RuntimeError('Planner must return non-empty steps with unique IDs')
+        ordered, done = [], set()
+        while len(ordered) < len(valid):
+            ready = [step for step in valid if step['id'] not in done and set(step['depends_on']) <= done]
+            if not ready:
+                raise RuntimeError('Plan contains missing or circular dependencies')
+            for step in ready:
+                ordered.append(step)
+                done.add(step['id'])
+        parsed['steps'] = ordered
         return {'classification': classification, 'plan': parsed, 'planner_route': result.get('jubi_provider_route') or result.get('jubi_route') or {}}
 
     def run(self, request: str, task_type: str = 'auto', provider: str = 'auto') -> dict:
@@ -252,6 +272,11 @@ class MultiAgentSupervisor:
         plan = planned['plan']
         results = []
         for step in plan.get('steps', []):
+            failed_dependencies = [x['id'] for x in results if x['id'] in step['depends_on'] and x['status'] != 'success']
+            if failed_dependencies:
+                results.append({'id': step['id'], 'role': step.get('role', 'general'), 'status': 'skipped',
+                                'output': '', 'error': 'Dependency failed: ' + ', '.join(failed_dependencies), 'route': {}})
+                continue
             role = str(step.get('role') or 'general').lower()
             if role not in self.ROLE_SYSTEMS or role in {'planner', 'reviewer'}:
                 role = 'general'

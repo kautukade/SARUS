@@ -25,6 +25,7 @@ async function discoverNetwork(){
   const btn=document.getElementById('network-discover');setBusy(btn,true,'Reading');
   try{
     const r=await API.post('/api/network/discover',{});
+    if(!r.ok)throw new Error(r.error||'Neighbor discovery failed');
     const el=document.getElementById('network-neighbors');
     el.innerHTML=(r.devices||[]).map(x=>`<div class="data-row"><div class="data-main"><div class="data-title mono">${networkEsc(x.ip)}</div><div class="data-meta">${networkEsc(x.mac||'no MAC')} · untrusted passive metadata</div></div><span class="badge warn">UNREGISTERED</span></div>`).join('')||'<div class="empty">No neighbors were present in the host cache.</div>';
     await loadNetwork();
@@ -37,6 +38,6 @@ async function registerNetwork(){
     const r=await API.post('/api/network/device',body);jsonBox('network-register-output',r);toast('Authorized device registered','ok');await loadNetwork();
   }catch(e){jsonBox('network-register-output','Error: '+e.message);toast(e.message,'bad');}finally{setBusy(btn,false);}
 }
-async function checkNetworkDevice(id,btn){setBusy(btn,true,'Checking');try{const r=await API.post('/api/network/check',{id});toast(`Checked ${r.host}`,'ok');jsonBox('network-register-output',r);await loadNetwork();}catch(e){toast(e.message,'bad');}finally{setBusy(btn,false);}}
+async function checkNetworkDevice(id,btn){setBusy(btn,true,'Checking');try{const r=await API.post('/api/network/check',{id});toast(r.ok?`Services reachable: ${r.host}`:(r.error||'Device check failed'),r.ok?'ok':'bad');jsonBox('network-register-output',r);await loadNetwork();}catch(e){toast(e.message,'bad');}finally{setBusy(btn,false);}}
 async function deleteNetworkDevice(id,btn){setBusy(btn,true,'Removing');try{await API.post('/api/network/delete',{id});toast('Device removed','ok');await loadNetwork();}catch(e){toast(e.message,'bad');}finally{setBusy(btn,false);}}
 document.addEventListener('DOMContentLoaded',async()=>{document.getElementById('network-refresh').onclick=loadNetwork;document.getElementById('network-discover').onclick=discoverNetwork;document.getElementById('network-register').onclick=registerNetwork;try{await loadNetwork();}catch(e){toast('Network page: '+e.message,'bad');}});

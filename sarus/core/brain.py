@@ -397,6 +397,8 @@ class BrainRouter:
                     model=selected,
                     timeout=timeout,
                 )
+                if not isinstance(result, dict) or not str(result.get('response') or '').strip():
+                    raise RuntimeError('Ollama returned an empty generation')
                 elapsed = (time.perf_counter() - started) * 1000.0
                 self._record_model_outcome(selected, decision['task_type'], True, elapsed)
                 decision['selected_model'] = selected

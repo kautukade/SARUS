@@ -117,6 +117,7 @@ def run_acceptance(
     full: bool = False,
     provision_models: bool = False,
     require_ring0: bool = False,
+    core_only: bool = False,
 ) -> dict:
     manifest = _load_json(root / 'BUILD_MANIFEST.json')
     production = _load_json(root / 'config' / 'production.json')
@@ -209,7 +210,7 @@ def run_acceptance(
         check(
             'SARA v7 native API bridge',
             lambda: app.native.status()['sara']['ready'],
-            required=bool(production.get('require_sara_on_windows', True)),
+            required=bool(production.get('require_sara_on_windows', True)) and not core_only,
         )
         check('ECC native runtime', lambda: app.native.status()['ecc']['ready'], required=False)
         check('Hermes native CLI', lambda: app.native.status()['hermes']['ready'], required=False)
@@ -240,6 +241,7 @@ def run_acceptance(
         'ok': ok,
         'target': 'windows' if os.name == 'nt' else os.name,
         'install_mode': install_mode,
+        'profile': 'core' if core_only else 'full',
         'pending_models': sorted(pending_models),
         'checks': checks,
         'doctor': doctor,
@@ -254,6 +256,7 @@ def main():
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--provision-models', action='store_true')
     parser.add_argument('--require-ring0', action='store_true')
+    parser.add_argument('--core-only', action='store_true', help='Check the core installation; report SARA native readiness without certifying it.')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     out = run_acceptance(
@@ -261,6 +264,7 @@ def main():
         full=args.full,
         provision_models=args.provision_models,
         require_ring0=args.require_ring0,
+        core_only=args.core_only,
     )
     print(json.dumps(out, ensure_ascii=False, indent=2))
     raise SystemExit(0 if out['ok'] else 2)

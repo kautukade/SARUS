@@ -1,4 +1,4 @@
-param()
+param([switch]$RequireSaraRuntime)
 $ErrorActionPreference='Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 $fail = New-Object System.Collections.Generic.List[string]
@@ -14,8 +14,8 @@ $required = @(
   'installer\INSTALL-SARUS.ps1',
   'INSTALL-SARUS.bat',
   'START_SARUS.bat',
-  'vendor\launcher\SARUS.exe.b64',
-  'vendor\launcher\SHA256.txt',
+  'installer\JubiLauncher.cs',
+  'installer\BUILD-LAUNCHER.ps1',
   'vendor\sara\FINAL-SHA256.txt'
 )
 foreach($r in $required){
@@ -26,13 +26,14 @@ $partsDir = Join-Path $Root 'vendor\sara\finalparts'
 $parts = @()
 if(Test-Path $partsDir){ $parts = @(Get-ChildItem $partsDir -Filter 'part-*.b64' -File | Sort-Object Name) }
 if($parts.Count -ne 24){
-  Fail "SARA finalparts count is $($parts.Count), expected 24"
+  $message = "Optional SARA native bundle has $($parts.Count)/24 parts; full native installation is unavailable."
+  if ($RequireSaraRuntime) { Fail $message } else { Write-Warning $message }
 } else {
   Pass 'SARA finalparts count = 24'
   try {
     $sb = New-Object Text.StringBuilder
     foreach($p in $parts){ [void]$sb.Append((Get-Content $p.FullName -Raw).Trim()) }
-    $tmp = Join-Path $env:TEMP 'SARUS-verify-SARA-public-final.tar.xz'
+    $tmp = Join-Path $env:TEMP ('Jubi-verify-SARA-' + [guid]::NewGuid().ToString('N') + '.tar.xz')
     [IO.File]::WriteAllBytes($tmp,[Convert]::FromBase64String($sb.ToString()))
     $expected=((Get-Content (Join-Path $Root 'vendor\sara\FINAL-SHA256.txt') -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
     $actual=(Get-FileHash -Algorithm SHA256 $tmp).Hash.ToLowerInvariant()
@@ -41,15 +42,14 @@ if($parts.Count -ne 24){
   } catch { Fail "SARA bundle reconstruction failed: $($_.Exception.Message)" }
 }
 
+$tmpLauncher=Join-Path $env:TEMP ('Jubi-verify-launcher-' + [guid]::NewGuid().ToString('N') + '.exe')
 try {
-  $launcherBytes=[Convert]::FromBase64String((Get-Content (Join-Path $Root 'vendor\launcher\SARUS.exe.b64') -Raw).Trim())
-  $tmpLauncher=Join-Path $env:TEMP 'SARUS-verify-launcher.exe'
-  [IO.File]::WriteAllBytes($tmpLauncher,$launcherBytes)
-  $expectedLauncher=((Get-Content (Join-Path $Root 'vendor\launcher\SHA256.txt') -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
-  $actualLauncher=(Get-FileHash -Algorithm SHA256 $tmpLauncher).Hash.ToLowerInvariant()
-  Remove-Item $tmpLauncher -Force -ErrorAction SilentlyContinue
-  if($actualLauncher -eq $expectedLauncher){ Pass "SARUS launcher SHA256 $actualLauncher" } else { Fail 'SARUS launcher checksum mismatch' }
-} catch { Fail "Launcher verification failed: $($_.Exception.Message)" }
+  & (Join-Path $Root 'installer\BUILD-LAUNCHER.ps1') -OutputPath $tmpLauncher
+  $bytes=[IO.File]::ReadAllBytes($tmpLauncher)
+  if($bytes.Length -gt 2 -and $bytes[0] -eq 77 -and $bytes[1] -eq 90){ Pass 'Tracked launcher source compiles to a Windows executable' }
+  else { Fail 'Compiled launcher has no Windows executable header' }
+} catch { Fail "Launcher compilation failed: $($_.Exception.Message)" }
+finally { Remove-Item $tmpLauncher -Force -ErrorAction SilentlyContinue }
 
 try {
   $specs=@(Get-Content (Join-Path $Root 'config\online_sources.json') -Raw | ConvertFrom-Json)
@@ -60,5 +60,5 @@ if($fail.Count -gt 0){
   Write-Host "`nSARUS repository verification FAILED: $($fail.Count) issue(s)." -ForegroundColor Red
   exit 1
 }
-Write-Host "`nSARUS repository verification PASSED." -ForegroundColor Green
+Write-Host "`nJubi core repository verification PASSED. See optional runtime warnings above." -ForegroundColor Green
 exit 0

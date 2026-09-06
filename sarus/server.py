@@ -8,6 +8,9 @@ import os
 import sys
 import traceback
 import secrets
+import ipaddress
+import socket
+import math
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -17,6 +20,18 @@ APP = Jubi(ROOT)
 SESSION_TOKEN = secrets.token_urlsafe(32)
 MAX_HTTP_BODY = 2 * 1024 * 1024
 MAX_VISION_BODY = 12 * 1024 * 1024
+
+
+def loopback_host(value):
+    host = str(value).strip().lower()
+    if host == 'localhost':
+        return '127.0.0.1'
+    try:
+        if ipaddress.ip_address(host).is_loopback:
+            return host
+    except ValueError:
+        pass
+    raise RuntimeError(f'Jubi is localhost-only; JUBI_HOST={value} is not permitted')
 
 
 def _env(primary: str, legacy: str, default: str) -> str:
@@ -44,30 +59,81 @@ class H(SimpleHTTPRequestHandler):
         if _env('JUBI_HTTP_LOG', 'SARUS_HTTP_LOG', '0') == '1':
             super().log_message(fmt, *args)
 
+    def end_headers(self):
+        # Apply these headers to HTML, scripts and errors as well as JSON.
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('X-Frame-Options', 'DENY')
+        self.send_header('Referrer-Policy', 'no-referrer')
+        self.send_header('Content-Security-Policy',
+                         "default-src 'self'; style-src 'self' 'unsafe-inline'; "
+                         "script-src 'self' 'unsafe-inline'; connect-src 'self'; "
+                         "img-src 'self' data: blob:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'")
+        super().end_headers()
+
+    def _local_request(self):
+        try:
+            authorities = self.headers.get_all('Host') or []
+            if len(authorities) != 1:
+                raise ValueError('one local Host header is required')
+            host = urlparse('http://' + authorities[0])
+            if host.username or host.password or host.path or host.query or host.fragment:
+                raise ValueError('invalid Host header')
+            loopback_host(host.hostname)
+            if (host.port or 80) != self.server.server_address[1]:
+                raise ValueError('Host port does not match the Jubi server')
+            origin = self.headers.get('Origin', '')
+            if origin and origin != 'http://' + authorities[0]:
+                raise ValueError('cross-origin request blocked')
+            if self.headers.get('Sec-Fetch-Site') == 'cross-site':
+                raise ValueError('cross-site request blocked')
+            return True
+        except (ValueError, RuntimeError):
+            self._json({'error': 'Only same-origin localhost requests are permitted'}, 403)
+            return False
+
+    def do_HEAD(self):
+        if self._local_request():
+            return super().do_HEAD()
+
     def _json(self, obj, code=200):
         b = json.dumps(obj, ensure_ascii=False, default=str).encode('utf-8')
         self.send_response(code)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Cache-Control', 'no-store')
-        self.send_header('X-Content-Type-Options', 'nosniff')
-        self.send_header('X-Frame-Options', 'DENY')
-        self.send_header('Referrer-Policy', 'no-referrer')
-        self.send_header(
-            'Content-Security-Policy',
-            "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:'",
-        )
         self.send_header('Content-Length', str(len(b)))
         self.end_headers()
-        self.wfile.write(b)
+        if self.command != 'HEAD':
+            self.wfile.write(b)
 
     def _body(self, max_bytes=MAX_HTTP_BODY):
+        if self.headers.get('Transfer-Encoding') or len(self.headers.get_all('Content-Length') or []) > 1:
+            raise ValueError('use a single Content-Length, not transfer encoding')
         n = int(self.headers.get('Content-Length', '0'))
         if n < 0 or n > int(max_bytes):
             raise ValueError(f'request body exceeds {int(max_bytes) // (1024 * 1024)} MiB limit')
         try:
-            return json.loads(self.rfile.read(n) or b'{}')
-        except json.JSONDecodeError as exc:
+            raw = self.rfile.read(n)
+            if len(raw) != n:
+                raise ValueError('incomplete request body')
+            def reject_constant(value):
+                raise ValueError('JSON numbers must be finite')
+            def finite_float(value):
+                number = float(value)
+                if not math.isfinite(number):
+                    return reject_constant(value)
+                return number
+            data = json.loads(raw or b'{}', parse_constant=reject_constant, parse_float=finite_float)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise ValueError('invalid JSON body') from exc
+        if not isinstance(data, dict):
+            raise ValueError('request body must be a JSON object')
+        for key in ('enabled', 'success'):
+            if key in data and type(data[key]) is not bool:
+                raise ValueError(f'{key} must be a boolean')
+        for key in ('text', 'prompt', 'content', 'name', 'title', 'namespace', 'query', 'question', 'api_key'):
+            if key in data and not isinstance(data[key], str):
+                raise ValueError(f'{key} must be a string')
+        return data
 
     @staticmethod
     def _safe_error(exc: Exception):
@@ -77,12 +143,22 @@ class H(SimpleHTTPRequestHandler):
         return payload
 
     def do_GET(self):
+        if not self._local_request():
+            return
         u = urlparse(self.path)
         p = u.path
         q = parse_qs(u.query, keep_blank_values=True)
         try:
             if p == '/api/session':
                 return self._json({'token': SESSION_TOKEN, 'product': 'Jubi'})
+            if p == '/api/health':
+                return self._json({'status': 'ok', 'product': 'Jubi', 'version': APP.VERSION})
+            if p == '/api/conversations':
+                return self._json(APP.conversations.recent())
+            if p == '/api/chat/history':
+                return self._json(APP.conversations.history(q.get('id', [''])[0]))
+            if p == '/api/task':
+                return self._json(APP.execution.get_task(q.get('id', [''])[0]))
             if p == '/api/status':
                 return self._json(APP.status())
             if p == '/api/brain':
@@ -211,6 +287,8 @@ class H(SimpleHTTPRequestHandler):
                 return self._json(APP.fable.agenda.list())
             if p == '/api/fable/lab/tail':
                 return self._json(APP.fable.lab.tail(int(q.get('limit', ['200'])[0])))
+            if p.startswith('/api/'):
+                return self._json({'error': 'API endpoint not found'}, 404)
             return super().do_GET()
         except ValueError as exc:
             return self._json(self._safe_error(exc), 400)
@@ -223,10 +301,12 @@ class H(SimpleHTTPRequestHandler):
             return self._json(self._safe_error(exc), 500)
 
     def do_POST(self):
+        if not self._local_request():
+            return
         p = urlparse(self.path).path
         token = self.headers.get('X-JUBI-Token', '') or self.headers.get('X-SARUS-Token', '')
         if token != SESSION_TOKEN:
-            return self._json({'error': 'invalid Jubi session token'}, 403)
+            return self._json({'error': 'invalid Jubi session token', 'code': 'session_expired'}, 403)
         origin = self.headers.get('Origin', '')
         host = self.headers.get('Host', '')
         if origin and origin not in {f'http://{host}', f'https://{host}'}:
@@ -349,9 +429,10 @@ class H(SimpleHTTPRequestHandler):
             if p == '/api/chat':
                 text = str(data.get('text', ''))
                 try:
-                    result = APP.providers.generate(
+                    result = APP.conversations.send(
                         text,
-                        str(data.get('task_type', 'auto')),
+                        conversation_id=data.get('conversation_id'),
+                        task_type=str(data.get('task_type', 'auto')),
                         model=data.get('model'),
                         provider=str(data.get('provider', 'auto')),
                     )
@@ -558,11 +639,12 @@ class H(SimpleHTTPRequestHandler):
 
 def run(port=None):
     port = int(port or _env('JUBI_PORT', 'SARUS_PORT', '8877'))
-    host = _env('JUBI_HOST', 'SARUS_HOST', '127.0.0.1')
-    if host == '0.0.0.0':
-        raise RuntimeError('Jubi is localhost-only; JUBI_HOST=0.0.0.0 is not permitted')
-    print(f'Jubi v{APP.VERSION} dashboard: http://{host}:{port}')
-    httpd = ThreadingHTTPServer((host, port), H)
+    host = loopback_host(_env('JUBI_HOST', 'SARUS_HOST', '127.0.0.1'))
+    address = f'[{host}]' if ':' in host else host
+    print(f'Jubi v{APP.VERSION} dashboard: http://{address}:{port}')
+    class LocalServer(ThreadingHTTPServer):
+        address_family = socket.AF_INET6 if ':' in host else socket.AF_INET
+    httpd = LocalServer((host, port), H)
     try:
         httpd.serve_forever()
     finally:

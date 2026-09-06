@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import os
 import secrets
 import threading
@@ -92,7 +93,7 @@ class PrivilegedBroker:
         return parsed.astimezone(timezone.utc).timestamp()
 
     def _check_freshness(self, ts: float):
-        if abs(time.time() - ts) > self.replay_window:
+        if not math.isfinite(ts) or abs(time.time() - ts) > self.replay_window:
             raise PermissionError('request timestamp is outside the replay window')
 
     def _mark_once(self, request_id: str, nonce: str):
@@ -334,3 +335,7 @@ class PrivilegedBroker:
         except (ValueError, KeyError, TypeError) as exc:
             receipt = self._receipt(request_id, action_id or 'unknown', 'invalid', {'status': 'invalid', 'reason': str(exc)})
             return {'ok': False, 'status': 'invalid', 'request_id': request_id, 'action_id': action_id, 'error': str(exc), 'receipt': receipt}
+        except (OSError, RuntimeError) as exc:
+            receipt = self._receipt(request_id, action_id or 'unknown', 'failed', {'status': 'failed', 'reason': str(exc)})
+            return {'ok': False, 'status': 'failed', 'request_id': request_id, 'action_id': action_id,
+                    'error': str(exc), 'receipt': receipt}

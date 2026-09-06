@@ -1,7 +1,7 @@
 'use strict';
 
 function researchSourceRows(rows){
-  return (rows||[]).map(x=>`<div class="data-row"><div class="data-main"><div class="data-title">${x.ref?'['+esc(x.ref)+'] ':''}${esc(x.title||x.url)}</div><div class="data-meta">${esc(x.url||'')}${x.chars?' · '+Number(x.chars).toLocaleString()+' chars':''}</div></div></div>`).join('')||renderEmpty('No sources yet.');
+  return (rows||[]).map(x=>`<div class="data-row"><div class="data-main"><div class="data-title">${x.ref?'['+esc(x.ref)+'] ':''}${esc(x.title||x.url)}</div><div class="data-meta">${/^https?:\/\//i.test(x.url||'')?`<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${esc(x.url)}</a>`:esc(x.url||'')}${x.chars?' · '+Number(x.chars).toLocaleString()+' chars':''}</div></div></div>`).join('')||renderEmpty('No sources yet.');
 }
 
 async function searchResearch(){
@@ -37,7 +37,7 @@ async function loadResearchHistory(){
 document.addEventListener('DOMContentLoaded',()=>{
   const title=document.querySelector('.page-title');if(title)title.textContent='Web Research';
   const sub=document.querySelector('.page-subtitle');if(sub)sub.textContent='Public search, safe page reading and source-grounded synthesis';
-  const nav=document.querySelector('.nav-scroll');if(nav && !nav.querySelector('[data-research-nav]')){
+  const nav=document.querySelector('.nav-scroll');if(nav && !nav.querySelector('a[href="/research.html"]')){
     const a=document.createElement('a');a.className='nav-link active';a.href='/research.html';a.dataset.researchNav='1';a.innerHTML='<span class="nav-icon">⌕</span><span>Web Research</span>';nav.appendChild(a);
   }
   const s=byId('research-search');if(s)s.onclick=searchResearch;
@@ -45,3 +45,10 @@ document.addEventListener('DOMContentLoaded',()=>{
   const f=byId('research-refresh');if(f)f.onclick=loadResearchHistory;
   loadResearchHistory();
 });
+
+async function readResearchPage(){
+ const button=byId('research-fetch');setBusy(button,true,'Reading');
+ try{const page=await API.post('/api/research/fetch',{url:byId('research-url').value.trim()});jsonBox('research-page-output',page.title+'\n'+page.url+'\n\n'+page.text);}
+ catch(e){jsonBox('research-page-output','Error: '+e.message);}finally{setBusy(button,false);}
+}
+document.addEventListener('DOMContentLoaded',()=>{byId('research-fetch').onclick=readResearchPage;});

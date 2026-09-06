@@ -63,7 +63,7 @@ class OpenAICompatibleProvider:
                     detail = raw
             except Exception:
                 detail = ''
-            detail = detail.strip().replace('\n', ' ')[:500]
+            detail = detail.replace(token, '[redacted]').strip().replace('\n', ' ')[:500]
             suffix = f': {detail}' if detail else ''
             if exc.code in (401, 403):
                 raise RuntimeError(f'{self.label} rejected the configured credential{suffix}') from exc
@@ -585,7 +585,7 @@ class ProviderManager:
         classification = self.brain.classify(prompt, task_type)
         mode = self.mode()
         explicit = str(provider or 'auto').strip().lower()
-        if explicit in ('ollama', 'local'):
+        if mode == 'local_only' or explicit in ('ollama', 'local'):
             order = ['ollama']
         elif explicit not in ('', 'auto', 'smart'):
             if classification['privacy'] == 'high' and not self.cfg.get('allow_high_privacy_cloud', False):
@@ -671,6 +671,9 @@ class ProviderManager:
         if not prompt:
             raise ValueError('chat prompt is required')
         classification = self.brain.classify(prompt, task_type)
+        # System/context content is also transmitted. Protect it as well as the prompt.
+        if system and self.brain.classify(system, task_type)['privacy'] == 'high':
+            classification['privacy'] = 'high'
         mode = self.mode()
         requested_provider = str(provider or 'auto').strip().lower()
 
@@ -680,6 +683,8 @@ class ProviderManager:
         explicit_cloud = requested_provider not in ('', 'auto', 'smart')
         if explicit_cloud:
             requested_provider = self._provider_id(requested_provider)
+            if mode == 'local_only':
+                raise PermissionError('Local Only mode disables cloud generation. Select Hybrid Auto or Cloud Boost in Providers first.')
             if classification['privacy'] == 'high' and not bool(self.cfg.get('allow_high_privacy_cloud', False)):
                 raise PermissionError(
                     'This request is classified as high privacy. Jubi blocks cloud transmission by default. '

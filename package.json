@@ -1,0 +1,9 @@
+{
+  "name": "jubi-dashboard-tests",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Development-only DOM regression tests; Jubi runtime uses Python standard library.",
+  "scripts": {"test": "python tests/run_dashboard_runtime.py"},
+  "devDependencies": {"jsdom": "26.1.0"},
+  "engines": {"node": ">=18"}
+}

@@ -190,14 +190,6 @@ class ExecutionEngine:
             if approval['status'] != 'pending' or approval['consumed']:
                 raise RuntimeError('approval has already been resolved')
 
-            with transaction(self.db) as c:
-                cur = c.execute(
-                    "UPDATE approvals SET status=?,resolved_ts=? WHERE id=? AND status='pending' AND consumed=0",
-                    (status, time.time(), aid),
-                )
-            if not cur.rowcount:
-                raise RuntimeError('approval was resolved concurrently')
-
             state = self._load_state(approval['task_id'])
             if not state:
                 raise RuntimeError('task state required for approval resume is missing')
@@ -208,6 +200,14 @@ class ExecutionEngine:
             pending = state['steps'][state['current_index']]
             if pending.get('id') != approval['step_id']:
                 raise RuntimeError('approval does not match the task pending step')
+
+            with transaction(self.db) as c:
+                cur = c.execute(
+                    "UPDATE approvals SET status=?,resolved_ts=? WHERE id=? AND status='pending' AND consumed=0",
+                    (status, time.time(), aid),
+                )
+            if not cur.rowcount:
+                raise RuntimeError('approval was resolved concurrently')
 
             if status == 'rejected':
                 pending['status'] = 'rejected'
@@ -393,7 +393,8 @@ class ExecutionEngine:
             )
 
         failed = any(not x.get('result', {}).get('ok', False) for x in state['results'])
-        final_status = 'partial' if failed else 'completed'
+        succeeded = any(x.get('result', {}).get('ok', False) for x in state['results'])
+        final_status = ('partial' if succeeded else 'failed') if failed else 'completed'
         state['status'] = final_status
         self._save_state(
             tid, state['request'], state['source'], state['capability_id'], state['steps'],
@@ -415,6 +416,14 @@ class ExecutionEngine:
         serialized = [asdict(step) for step in steps]
         self._save_state(tid, request, source, capability_id, serialized, 0, [], [], 'queued')
         return self._continue_task(tid)
+
+    def get_task(self, task_id):
+        with read_connection(self.db) as c:
+            row = c.execute('SELECT id,ts,request,status,result,source FROM tasks WHERE id=?', (task_id,)).fetchone()
+        if not row:
+            raise KeyError('task not found')
+        return {'id': row[0], 'task_id': row[0], 'ts': row[1], 'request': row[2], 'status': row[3],
+                'result': json.loads(row[4]) if row[4] else None, 'source': row[5]}
 
     def recent_tasks(self, limit=50):
         limit = max(1, min(int(limit), 500))

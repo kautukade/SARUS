@@ -15,13 +15,17 @@ async function loadVisionStatus(){
   const speech=!!window.speechSynthesis;
   document.getElementById('voice-status').textContent=(Recognition?'STT ':'')+(speech?'TTS':'')||'UNAVAILABLE';
 }
+let visionFileVersion=0;
 function chooseVisionFile(){
-  const file=document.getElementById('vision-file').files?.[0];
-  if(!file){visionDataUri='';return;}
-  if(file.size>8*1024*1024){toast('Image must be 8 MiB or smaller','bad');document.getElementById('vision-file').value='';return;}
-  const allowed=['image/png','image/jpeg','image/webp'];if(!allowed.includes(file.type)){toast('Use PNG, JPEG or WebP','bad');return;}
-  const r=new FileReader();r.onload=()=>{visionDataUri=String(r.result||'');const img=document.getElementById('vision-preview');img.src=visionDataUri;img.style.display='block';document.getElementById('vision-no-preview').style.display='none';};r.readAsDataURL(file);
+ const version=++visionFileVersion;visionDataUri='';visionLastText='';
+ const input=document.getElementById('vision-file'),img=document.getElementById('vision-preview');
+ img.removeAttribute('src');img.style.display='none';document.getElementById('vision-no-preview').style.display='block';
+ const file=input.files?.[0];if(!file)return;
+ if(file.size>8*1024*1024||!['image/png','image/jpeg','image/webp'].includes(file.type)){input.value='';toast('Use a PNG, JPEG or WebP image of 8 MiB or smaller','bad');return;}
+ const reader=new FileReader();reader.onload=()=>{if(version!==visionFileVersion)return;visionDataUri=String(reader.result||'');img.src=visionDataUri;img.style.display='block';document.getElementById('vision-no-preview').style.display='none';};
+ reader.onerror=()=>{if(version===visionFileVersion)toast('Image could not be read','bad');};reader.readAsDataURL(file);
 }
+
 async function analyzeVision(){
   if(!visionDataUri)return toast('Choose an image first','bad');
   const btn=document.getElementById('vision-analyze');setBusy(btn,true,'Analyzing');
